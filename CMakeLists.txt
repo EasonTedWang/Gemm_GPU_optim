@@ -41,3 +41,10 @@ add_custom_target(all_examples
   DEPENDS ${ALL_GEMM_TARGETS}
   COMMENT "Build all GEMM example executables"
 )
+
+if(CUDAToolkit_FOUND)
+  enable_testing()
+  add_test(NAME gemm_tensor_core_verify
+    COMMAND ${CMAKE_SOURCE_DIR}/out/gemm_tensor_core 256 256 256 --verify
+  )
+endif()
