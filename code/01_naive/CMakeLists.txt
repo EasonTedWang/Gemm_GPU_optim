@@ -11,7 +11,13 @@ if(NOT CMAKE_CUDA_STANDARD)
 endif()
 
 if(MSVC)
-  target_compile_options(gemm_naive_cuda PRIVATE /W4)
+  target_compile_options(gemm_naive_cuda PRIVATE
+    $<$<COMPILE_LANGUAGE:CXX>:/W4>
+    $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/W4>
+  )
 else()
-  target_compile_options(gemm_naive_cuda PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(gemm_naive_cuda PRIVATE
+    $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic>
+    $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wall,-Wextra>
+  )
 endif()
