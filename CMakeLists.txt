@@ -60,4 +60,24 @@ if(CUDAToolkit_FOUND)
   add_test(NAME gemm_tensor_core_verify
     COMMAND ${CMAKE_SOURCE_DIR}/out/gemm_tensor_core 64 64 64 --verify --warmup 1 --repeat 1
   )
+
+  add_test(NAME gemm_naive_perf_512
+    COMMAND ${CMAKE_SOURCE_DIR}/out/gemm_naive_cuda 512 512 512 --no-verify --warmup 3 --repeat 10
+  )
+  add_test(NAME gemm_tiled_perf_512
+    COMMAND ${CMAKE_SOURCE_DIR}/out/gemm_tiled_cuda 512 512 512 --no-verify --warmup 3 --repeat 10
+  )
+  add_test(NAME gemm_warp_perf_512
+    COMMAND ${CMAKE_SOURCE_DIR}/out/gemm_warp_cuda 512 512 512 --no-verify --warmup 3 --repeat 10
+  )
+  add_test(NAME gemm_tensor_core_perf_512
+    COMMAND ${CMAKE_SOURCE_DIR}/out/gemm_tensor_core 512 512 512 --no-verify --warmup 3 --repeat 10
+  )
 endif()
+
+add_custom_target(test_gemm_verbose
+  COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure --verbose
+  DEPENDS all_examples
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+  COMMENT "Run GEMM tests with benchmark output visible"
+)

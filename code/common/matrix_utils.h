@@ -30,6 +30,14 @@ struct VerificationResult {
     float expectedAtMaxError = 0.0f;
 };
 
+struct HardwareProfile {
+    std::string name;
+    int cudaCores = 0;
+    double boostClockGhz = 0.0;
+    double peakFp32Gflops = 0.0;
+    double memoryBandwidthGBps = 0.0;
+};
+
 void random_matrix(float* matrix, int rows, int cols);
 void random_matrix_seeded(float* matrix, int rows, int cols, unsigned int seed);
 void fill_matrix(float* matrix, int rows, int cols, float value);
@@ -47,7 +55,10 @@ VerificationResult compare_matrices(const float* actual,
                                     float rtol = 1e-3f);
 void print_verification_result(const VerificationResult& result);
 
+const HardwareProfile& default_gpu_profile();
 double gemm_gflops(const GemmProblem& problem, double avgMs);
+double compute_efficiency_percent(double achievedGflops, const HardwareProfile& hardware);
 void print_benchmark_result(const std::string& label,
                             const GemmProblem& problem,
-                            double avgMs);
+                            double avgMs,
+                            const HardwareProfile* hardware = nullptr);

@@ -70,6 +70,15 @@ cmake --build . --target all_examples
 
 输出中的 `avg_ms` 是 kernel 平均耗时，`gflops` 使用 `2*M*N*K / time` 计算。CUDA 示例的计时只覆盖 kernel，不包含 Host/Device 数据拷贝。
 
+当前默认 GPU profile 是 `NVIDIA GeForce RTX 5080 16GB`：
+
+- CUDA cores: 10752
+- Boost clock: 2.62 GHz
+- FP32 peak: `10752 * 2 * 2.62 = 56.34 TFLOP/s`
+- Memory bandwidth: 960 GB/s
+
+CUDA benchmark 输出会额外打印 `fp32_peak` 和 `fp32_efficiency`，其中 `fp32_efficiency = measured_gflops / fp32_peak_gflops * 100%`。Tensor Core 示例暂时也打印这个 FP32 峰值参照，后续可以再补独立的 Tensor Core 峰值口径。
+
 ## 测试
 
 构建后运行：
@@ -78,7 +87,19 @@ cmake --build . --target all_examples
 ctest --test-dir build --output-on-failure
 ```
 
-当前测试会覆盖 CPU baseline、naive CUDA、tiled CUDA、register-tiled CUDA 和 Tensor Core 的小尺寸正确性冒烟。
+当前测试会覆盖 CPU baseline、naive CUDA、tiled CUDA、register-tiled CUDA 和 Tensor Core 的小尺寸正确性冒烟，也会运行 512x512x512 的 CUDA 性能冒烟。
+
+如果要在测试过程中直接看到每个 kernel 的 `avg_ms`、`gflops` 和 `fp32_efficiency`：
+
+```bash
+ctest --test-dir build --verbose
+```
+
+也可以使用项目内的 verbose 测试 target：
+
+```bash
+cmake --build build --target test_gemm_verbose
+```
 
 ## 学习计划
 
