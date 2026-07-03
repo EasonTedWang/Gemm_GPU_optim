@@ -220,6 +220,18 @@ void print_verification_result(const VerificationResult& result)
     std::cout << "\n";
 }
 
+const HardwareProfile& default_gpu_profile()
+{
+    static const HardwareProfile profile{
+        "NVIDIA GeForce RTX 5080 16GB",
+        10752,
+        2.62,
+        10752.0 * 2.0 * 2.62,
+        960.0,
+    };
+    return profile;
+}
+
 double gemm_gflops(const GemmProblem& problem, double avgMs)
 {
     if (avgMs <= 0.0) {
@@ -231,17 +243,36 @@ double gemm_gflops(const GemmProblem& problem, double avgMs)
     return flop / (avgMs * 1.0e6);
 }
 
+double compute_efficiency_percent(double achievedGflops, const HardwareProfile& hardware)
+{
+    if (hardware.peakFp32Gflops <= 0.0) {
+        return 0.0;
+    }
+    return achievedGflops / hardware.peakFp32Gflops * 100.0;
+}
+
 void print_benchmark_result(const std::string& label,
                             const GemmProblem& problem,
-                            double avgMs)
+                            double avgMs,
+                            const HardwareProfile* hardware)
 {
     std::ios oldState(nullptr);
     oldState.copyfmt(std::cout);
 
+    double achievedGflops = gemm_gflops(problem, avgMs);
     std::cout << std::fixed << std::setprecision(4)
               << label << ": avg_ms=" << avgMs
-              << " | gflops=" << std::setprecision(2)
-              << gemm_gflops(problem, avgMs);
+              << " | gflops=" << std::setprecision(2) << achievedGflops;
+
+    if (hardware != nullptr) {
+        std::cout << " | gpu=\"" << hardware->name << "\""
+                  << " | fp32_peak=" << std::setprecision(2)
+                  << (hardware->peakFp32Gflops / 1000.0) << " TFLOP/s"
+                  << " | fp32_efficiency=" << std::setprecision(4)
+                  << compute_efficiency_percent(achievedGflops, *hardware) << "%"
+                  << " | mem_bw=" << std::setprecision(0)
+                  << hardware->memoryBandwidthGBps << " GB/s";
+    }
 
     std::cout.copyfmt(oldState);
     std::cout << "\n";
