@@ -1,13 +1,20 @@
 #include <cuda_runtime.h>
+
+#include <cstddef>
+#include <exception>
 #include <iostream>
 #include <vector>
-#include "../common/matrix_utils.h"
+
+#include "cuda_utils.cuh"
+#include "matrix_utils.h"
 
 __global__ void gemm_naive_kernel(const float* A, const float* B, float* C, int M, int N, int K)
 {
     int row = blockIdx.y * blockDim.y + threadIdx.y;
     int col = blockIdx.x * blockDim.x + threadIdx.x;
-    if (row >= M || col >= N) return;
+    if (row >= M || col >= N) {
+        return;
+    }
 
     float sum = 0.0f;
     for (int k = 0; k < K; ++k) {
@@ -16,50 +23,89 @@ __global__ void gemm_naive_kernel(const float* A, const float* B, float* C, int 
     C[row * N + col] = sum;
 }
 
+static void launch_gemm_naive(const float* d_A, const float* d_B, float* d_C, const GemmProblem& p)
+{
+    dim3 block(16, 16);
+    dim3 grid((p.N + block.x - 1) / block.x, (p.M + block.y - 1) / block.y);
+    gemm_naive_kernel<<<grid, block>>>(d_A, d_B, d_C, p.M, p.N, p.K);
+}
+
 int main(int argc, char** argv)
 {
-    int M = 256;
-    int N = 256;
-    int K = 256;
-
-    if (argc >= 4) {
-        M = std::atoi(argv[1]);
-        N = std::atoi(argv[2]);
-        K = std::atoi(argv[3]);
+    RunConfig config;
+    try {
+        config = parse_run_config(argc, argv);
+    } catch (const std::exception& e) {
+        std::cerr << e.what() << "\n";
+        print_usage(std::cerr, argv[0]);
+        return 1;
     }
 
-    std::vector<float> A(M * K);
-    std::vector<float> B(K * N);
-    std::vector<float> C(M * N, 0.0f);
+    if (config.showHelp) {
+        print_usage(std::cout, argv[0]);
+        return 0;
+    }
 
-    random_matrix(A.data(), M, K);
-    random_matrix(B.data(), K, N);
+    const GemmProblem& p = config.problem;
+    print_run_config("CUDA naive GEMM", config);
 
-    float* d_A;
-    float* d_B;
-    float* d_C;
+    std::vector<float> A(static_cast<std::size_t>(p.M) * p.K);
+    std::vector<float> B(static_cast<std::size_t>(p.K) * p.N);
+    std::vector<float> C(static_cast<std::size_t>(p.M) * p.N, 0.0f);
 
-    cudaMalloc(&d_A, sizeof(float) * M * K);
-    cudaMalloc(&d_B, sizeof(float) * K * N);
-    cudaMalloc(&d_C, sizeof(float) * M * N);
+    random_matrix_seeded(A.data(), p.M, p.K, config.seed);
+    random_matrix_seeded(B.data(), p.K, p.N, config.seed + 1);
 
-    cudaMemcpy(d_A, A.data(), sizeof(float) * M * K, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_B, B.data(), sizeof(float) * K * N, cudaMemcpyHostToDevice);
+    const std::size_t bytesA = sizeof(float) * A.size();
+    const std::size_t bytesB = sizeof(float) * B.size();
+    const std::size_t bytesC = sizeof(float) * C.size();
 
-    dim3 block(16, 16);
-    dim3 grid((N + block.x - 1) / block.x, (M + block.y - 1) / block.y);
+    float* d_A = nullptr;
+    float* d_B = nullptr;
+    float* d_C = nullptr;
+    CUDA_CHECK(cudaMalloc(&d_A, bytesA));
+    CUDA_CHECK(cudaMalloc(&d_B, bytesB));
+    CUDA_CHECK(cudaMalloc(&d_C, bytesC));
+    CUDA_CHECK(cudaMemcpy(d_A, A.data(), bytesA, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_B, B.data(), bytesB, cudaMemcpyHostToDevice));
 
-    gemm_naive_kernel<<<grid, block>>>(d_A, d_B, d_C, M, N, K);
-    cudaDeviceSynchronize();
+    for (int i = 0; i < config.warmup; ++i) {
+        launch_gemm_naive(d_A, d_B, d_C, p);
+    }
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
 
-    cudaMemcpy(C.data(), d_C, sizeof(float) * M * N, cudaMemcpyDeviceToHost);
+    if (config.benchmark) {
+        GpuTimer timer;
+        timer.start();
+        for (int i = 0; i < config.repeat; ++i) {
+            launch_gemm_naive(d_A, d_B, d_C, p);
+        }
+        CUDA_CHECK(cudaGetLastError());
+        float totalMs = timer.stop_ms();
+        print_benchmark_result("Kernel", p, totalMs / static_cast<double>(config.repeat));
+    } else {
+        launch_gemm_naive(d_A, d_B, d_C, p);
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaDeviceSynchronize());
+    }
 
-    std::cout << "CUDA naive GEMM done: M=" << M << " N=" << N << " K=" << K << "\n";
-    std::cout << "Result sample: C[0]=" << C[0] << " C[last]=" << C[M * N - 1] << "\n";
+    CUDA_CHECK(cudaMemcpy(C.data(), d_C, bytesC, cudaMemcpyDeviceToHost));
 
-    cudaFree(d_A);
-    cudaFree(d_B);
-    cudaFree(d_C);
+    bool passed = true;
+    if (config.verify) {
+        std::vector<float> reference(C.size());
+        cpu_gemm_reference(A.data(), B.data(), reference.data(), p.M, p.N, p.K);
+        VerificationResult result = compare_matrices(C.data(), reference.data(), static_cast<int>(C.size()));
+        print_verification_result(result);
+        passed = result.passed;
+    }
 
-    return 0;
+    std::cout << "Result sample: C[0]=" << C.front()
+              << " C[last]=" << C.back() << "\n";
+
+    CUDA_CHECK(cudaFree(d_A));
+    CUDA_CHECK(cudaFree(d_B));
+    CUDA_CHECK(cudaFree(d_C));
+    return passed ? 0 : 1;
 }

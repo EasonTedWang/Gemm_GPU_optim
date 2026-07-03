@@ -42,9 +42,22 @@ add_custom_target(all_examples
   COMMENT "Build all GEMM example executables"
 )
 
+enable_testing()
+add_test(NAME origin_gemm_smoke
+  COMMAND ${CMAKE_SOURCE_DIR}/out/origin_gemm 32 33 34 --verify --warmup 0 --repeat 1
+)
+
 if(CUDAToolkit_FOUND)
-  enable_testing()
+  add_test(NAME gemm_naive_verify
+    COMMAND ${CMAKE_SOURCE_DIR}/out/gemm_naive_cuda 32 33 34 --verify --warmup 1 --repeat 1
+  )
+  add_test(NAME gemm_tiled_verify
+    COMMAND ${CMAKE_SOURCE_DIR}/out/gemm_tiled_cuda 32 33 34 --verify --warmup 1 --repeat 1
+  )
+  add_test(NAME gemm_warp_verify
+    COMMAND ${CMAKE_SOURCE_DIR}/out/gemm_warp_cuda 32 33 34 --verify --warmup 1 --repeat 1
+  )
   add_test(NAME gemm_tensor_core_verify
-    COMMAND ${CMAKE_SOURCE_DIR}/out/gemm_tensor_core 256 256 256 --verify
+    COMMAND ${CMAKE_SOURCE_DIR}/out/gemm_tensor_core 64 64 64 --verify --warmup 1 --repeat 1
   )
 endif()

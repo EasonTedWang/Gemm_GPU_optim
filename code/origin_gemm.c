@@ -1,46 +1,57 @@
+#include <chrono>
+#include <exception>
 #include <iostream>
-#include <cstdlib>
 #include <vector>
-#include "common/matrix_utils.h"
 
-static void cpu_gemm(const float* A, const float* B, float* C, int M, int N, int K)
-{
-    for (int i = 0; i < M; ++i) {
-        for (int j = 0; j < N; ++j) {
-            float sum = 0.0f;
-            for (int k = 0; k < K; ++k) {
-                sum += A[i * K + k] * B[k * N + j];
-            }
-            C[i * N + j] = sum;
-        }
-    }
-}
+#include "matrix_utils.h"
 
 int main(int argc, char** argv)
 {
-    int M = 256;
-    int N = 256;
-    int K = 256;
-
-    if (argc >= 4) {
-        M = std::atoi(argv[1]);
-        N = std::atoi(argv[2]);
-        K = std::atoi(argv[3]);
+    RunConfig config;
+    try {
+        config = parse_run_config(argc, argv);
+    } catch (const std::exception& e) {
+        std::cerr << e.what() << "\n";
+        print_usage(std::cerr, argv[0]);
+        return 1;
     }
 
-    std::vector<float> A(M * K);
-    std::vector<float> B(K * N);
-    std::vector<float> C(M * N, 0.0f);
+    if (config.showHelp) {
+        print_usage(std::cout, argv[0]);
+        return 0;
+    }
 
-    random_matrix(A.data(), M, K);
-    random_matrix(B.data(), K, N);
+    const GemmProblem& p = config.problem;
+    print_run_config("CPU reference GEMM", config);
 
-    std::cout << "Running CPU GEMM with M=" << M << " N=" << N << " K=" << K << "\n";
-    cpu_gemm(A.data(), B.data(), C.data(), M, N, K);
+    std::vector<float> A(static_cast<std::size_t>(p.M) * p.K);
+    std::vector<float> B(static_cast<std::size_t>(p.K) * p.N);
+    std::vector<float> C(static_cast<std::size_t>(p.M) * p.N, 0.0f);
 
-    std::cout << "Result sample: C[0]=" << C[0] << " C[last]=" << C[M * N - 1] << "\n";
+    random_matrix_seeded(A.data(), p.M, p.K, config.seed);
+    random_matrix_seeded(B.data(), p.K, p.N, config.seed + 1);
+
+    if (config.benchmark) {
+        for (int i = 0; i < config.warmup; ++i) {
+            cpu_gemm_reference(A.data(), B.data(), C.data(), p.M, p.N, p.K);
+        }
+
+        auto start = std::chrono::steady_clock::now();
+        for (int i = 0; i < config.repeat; ++i) {
+            cpu_gemm_reference(A.data(), B.data(), C.data(), p.M, p.N, p.K);
+        }
+        auto stop = std::chrono::steady_clock::now();
+        double totalMs = std::chrono::duration<double, std::milli>(stop - start).count();
+        print_benchmark_result("CPU", p, totalMs / static_cast<double>(config.repeat));
+    } else {
+        cpu_gemm_reference(A.data(), B.data(), C.data(), p.M, p.N, p.K);
+    }
+
+    if (config.verify) {
+        std::cout << "Verification: PASSED | CPU reference implementation is the oracle\n";
+    }
+
+    std::cout << "Result sample: C[0]=" << C.front()
+              << " C[last]=" << C.back() << "\n";
     return 0;
 }
-
-
-

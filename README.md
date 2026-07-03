@@ -1,95 +1,92 @@
 # Gemm_GPU_optim
-利用 CUDA/AVX 等硬件从零开始优化 GEMM，借由 CODEX 来辅助学习
 
-## 学习计划
+利用 CUDA/AVX 等硬件从零开始优化 GEMM，借由 CODEX 来辅助学习。
 
-本仓库的学习路径已经整理为文档，见 [docs/gemm_learning_plan.md](docs/gemm_learning_plan.md)。
+## 当前目标
 
-建议按以下顺序推进：
-
-1. 先理解 GEMM 的数学定义与 GPU 计算模型
-2. 实现 CPU 参考版本和 naive CUDA 版本
-3. 逐步引入 tiling、shared memory 与 warp 级优化
-4. 最后进入 Tensor Core 和接近 CUTLASS 风格的结构化实现
+这个仓库的核心目标是建立一套可反复实验的 GEMM 学习环境：每个 kernel 都要能验证正确性，也要能输出基本性能指标，后续再逐步推进 CPU、CUDA、AVX、Tensor Core 等优化版本。
 
 ## 项目结构
 
 - `CMakeLists.txt` 根级 CMake 工程
-- `code/` 源码目录
-  - `code/origin_gemm.c` CPU GEMM 基线示例
-  - `code/common/` 公共工具
-  - `code/01_naive/` Naive CUDA GEMM 示例
-  - `code/02_tiled/` Tiled GEMM 骨架
-  - `code/03_warp/` Warp 级优化骨架
-  - `code/04_tensor_core/` Tensor Core 骨架
+- `docs/gemm_learning_plan.md` GEMM 优化学习路线
+- `code/origin_gemm.c` CPU reference / baseline
+- `code/common/` 公共实验工具
+  - `matrix_utils.*` 参数解析、随机矩阵、CPU reference、误差比较、GFLOPS 输出
+  - `cuda_utils.cuh` CUDA error check 和 kernel 计时器
+- `code/01_naive/` Naive CUDA GEMM
+- `code/02_tiled/` Shared-memory tiled CUDA GEMM
+- `code/03_warp/` Register-tiled CUDA GEMM
+- `code/04_tensor_core/` WMMA Tensor Core GEMM
 
-## 如何运行
-
-1. 创建构建目录：
-
-```bash
-mkdir -p build
-cd build
-```
-
-2. 生成构建文件：
-
-```bash
-cmake .. -DENABLE_CUDA=ON
-```
-
-如果你没有安装 CUDA Toolkit，使用：
-
-```bash
-cmake .. -DENABLE_CUDA=OFF
-```
-
-3. 编译项目：
-
-```bash
-cmake --build . --target all_examples
-```
-
-或直接使用仓库根目录的一键脚本：
+## 构建
 
 ```bash
 ./build_all.sh
 ```
 
-这样会生成以下所有可用示例，并把可执行文件输出到 `out/` 目录：
-- `origin_gemm`
-- `gemm_naive_cuda`
-- `gemm_tiled_cuda`
-- `gemm_warp_cuda`
-- `gemm_tensor_core` (如果 CUDA 可用)
-
-4. 运行程序：
+或手动执行：
 
 ```bash
-./out/origin_gemm 256 256 256
+mkdir -p build
+cd build
+cmake .. -DENABLE_CUDA=ON
+cmake --build . --target all_examples
 ```
 
-如果你要运行 CUDA 示例：
+如果没有 CUDA Toolkit：
 
 ```bash
-./out/gemm_naive_cuda 256 256 256
-./out/gemm_tiled_cuda 256 256 256
-./out/gemm_warp_cuda 256 256 256
-./out/gemm_tensor_core 256 256 256
+cmake .. -DENABLE_CUDA=OFF
+cmake --build . --target all_examples
 ```
 
-4. 运行程序：
+## 统一运行参数
+
+所有示例都支持同一组基础参数：
 
 ```bash
-./code/origin_gemm 256 256 256
+./out/gemm_naive_cuda [M N K] [options]
 ```
 
-如果你已经编译了 CUDA 示例：
+常用选项：
+
+- `--verify`：用 CPU reference 做全矩阵正确性校验
+- `--warmup N`：计时前预热次数，默认 3
+- `--repeat N`：计时循环次数，默认 10
+- `--seed N`：固定随机种子，默认 2026
+- `--no-benchmark`：只运行一次，不输出计时
+- `-h` / `--help`：查看帮助
+
+示例：
 
 ```bash
-./code/gemm_naive_cuda 256 256 256
+./out/origin_gemm 256 256 256 --verify --repeat 1 --warmup 0
+./out/gemm_naive_cuda 256 256 256 --verify --repeat 10 --warmup 3
+./out/gemm_tiled_cuda 256 256 256 --verify --repeat 10 --warmup 3
+./out/gemm_warp_cuda 256 256 256 --verify --repeat 10 --warmup 3
+./out/gemm_tensor_core 256 256 256 --verify --repeat 10 --warmup 3
 ```
 
-## 说明
+输出中的 `avg_ms` 是 kernel 平均耗时，`gflops` 使用 `2*M*N*K / time` 计算。CUDA 示例的计时只覆盖 kernel，不包含 Host/Device 数据拷贝。
 
-当前仓库已搭建好 CMake 管理的基础工程结构，并提供 CPU GEMM 示例与 CUDA 示例骨架。你可以先从 `origin_gemm` 开始验证编译和运行，再逐步在 `code/01_naive`、`code/02_tiled` 等目录中实现优化版本。
+## 测试
+
+构建后运行：
+
+```bash
+ctest --test-dir build --output-on-failure
+```
+
+当前测试会覆盖 CPU baseline、naive CUDA、tiled CUDA、register-tiled CUDA 和 Tensor Core 的小尺寸正确性冒烟。
+
+## 学习计划
+
+完整学习路线见 [docs/gemm_learning_plan.md](docs/gemm_learning_plan.md)。建议按以下顺序推进：
+
+1. 理解 GEMM 数学定义与 CPU reference
+2. 跑通 naive CUDA 并观察访存瓶颈
+3. 引入 shared memory tiling
+4. 引入每线程多输出元素、register tiling、warp/block tile 设计
+5. 学习 Tensor Core / WMMA
+6. 逐步靠近 CUTLASS 风格的结构化 GEMM kernel

@@ -1,51 +1,57 @@
 #include <cuda_runtime.h>
+
+#include <cstddef>
+#include <exception>
 #include <iostream>
 #include <vector>
-#include "../common/matrix_utils.h"
+
+#include "cuda_utils.cuh"
+#include "matrix_utils.h"
 
 constexpr int TILE_M = 64;
 constexpr int TILE_N = 64;
 constexpr int TILE_K = 16;
+constexpr int THREAD_TILE_M = 8;
+constexpr int THREAD_TILE_N = 8;
 
 __global__ void gemm_warp_kernel(const float* A, const float* B, float* C, int M, int N, int K)
 {
     __shared__ float sharedA[TILE_M][TILE_K];
     __shared__ float sharedB[TILE_K][TILE_N];
 
-    int row = blockIdx.y * TILE_M + threadIdx.y * 8;
-    int col = blockIdx.x * TILE_N + threadIdx.x * 8;
+    int threadLinear = threadIdx.y * blockDim.x + threadIdx.x;
+    int threadCount = blockDim.x * blockDim.y;
+    int rowBase = blockIdx.y * TILE_M + threadIdx.y * THREAD_TILE_M;
+    int colBase = blockIdx.x * TILE_N + threadIdx.x * THREAD_TILE_N;
 
-    float accum[8][8] = {};
+    float accum[THREAD_TILE_M][THREAD_TILE_N] = {};
 
     for (int t = 0; t < (K + TILE_K - 1) / TILE_K; ++t) {
-        int aRow = blockIdx.y * TILE_M + threadIdx.y * 8;
-        int aCol = t * TILE_K + threadIdx.x;
-        int bRow = t * TILE_K + threadIdx.y;
-        int bCol = blockIdx.x * TILE_N + threadIdx.x * 8;
-
-        for (int i = 0; i < 8; ++i) {
-            for (int j = 0; j < TILE_K; ++j) {
-                int rowIndex = aRow + i;
-                int colIndex = aCol + j;
-                sharedA[i][j] = (rowIndex < M && colIndex < K) ? A[rowIndex * K + colIndex] : 0.0f;
-            }
+        for (int index = threadLinear; index < TILE_M * TILE_K; index += threadCount) {
+            int tileRow = index / TILE_K;
+            int tileCol = index % TILE_K;
+            int globalRow = blockIdx.y * TILE_M + tileRow;
+            int globalCol = t * TILE_K + tileCol;
+            sharedA[tileRow][tileCol] =
+                (globalRow < M && globalCol < K) ? A[globalRow * K + globalCol] : 0.0f;
         }
 
-        for (int i = 0; i < TILE_K; ++i) {
-            for (int j = 0; j < 8; ++j) {
-                int rowIndex = bRow + i;
-                int colIndex = bCol + j;
-                sharedB[i][j] = (rowIndex < K && colIndex < N) ? B[rowIndex * N + colIndex] : 0.0f;
-            }
+        for (int index = threadLinear; index < TILE_K * TILE_N; index += threadCount) {
+            int tileRow = index / TILE_N;
+            int tileCol = index % TILE_N;
+            int globalRow = t * TILE_K + tileRow;
+            int globalCol = blockIdx.x * TILE_N + tileCol;
+            sharedB[tileRow][tileCol] =
+                (globalRow < K && globalCol < N) ? B[globalRow * N + globalCol] : 0.0f;
         }
 
         __syncthreads();
 
         for (int k = 0; k < TILE_K; ++k) {
-            for (int i = 0; i < 8; ++i) {
-                float aVal = sharedA[i][k];
-                for (int j = 0; j < 8; ++j) {
-                    accum[i][j] += aVal * sharedB[k][j];
+            for (int i = 0; i < THREAD_TILE_M; ++i) {
+                float aVal = sharedA[threadIdx.y * THREAD_TILE_M + i][k];
+                for (int j = 0; j < THREAD_TILE_N; ++j) {
+                    accum[i][j] += aVal * sharedB[k][threadIdx.x * THREAD_TILE_N + j];
                 }
             }
         }
@@ -53,10 +59,10 @@ __global__ void gemm_warp_kernel(const float* A, const float* B, float* C, int M
         __syncthreads();
     }
 
-    for (int i = 0; i < 8; ++i) {
-        for (int j = 0; j < 8; ++j) {
-            int outRow = row + i;
-            int outCol = col + j;
+    for (int i = 0; i < THREAD_TILE_M; ++i) {
+        for (int j = 0; j < THREAD_TILE_N; ++j) {
+            int outRow = rowBase + i;
+            int outCol = colBase + j;
             if (outRow < M && outCol < N) {
                 C[outRow * N + outCol] = accum[i][j];
             }
@@ -64,50 +70,89 @@ __global__ void gemm_warp_kernel(const float* A, const float* B, float* C, int M
     }
 }
 
+static void launch_gemm_warp(const float* d_A, const float* d_B, float* d_C, const GemmProblem& p)
+{
+    dim3 block(TILE_N / THREAD_TILE_N, TILE_M / THREAD_TILE_M);
+    dim3 grid((p.N + TILE_N - 1) / TILE_N, (p.M + TILE_M - 1) / TILE_M);
+    gemm_warp_kernel<<<grid, block>>>(d_A, d_B, d_C, p.M, p.N, p.K);
+}
+
 int main(int argc, char** argv)
 {
-    int M = 256;
-    int N = 256;
-    int K = 256;
-
-    if (argc >= 4) {
-        M = std::atoi(argv[1]);
-        N = std::atoi(argv[2]);
-        K = std::atoi(argv[3]);
+    RunConfig config;
+    try {
+        config = parse_run_config(argc, argv);
+    } catch (const std::exception& e) {
+        std::cerr << e.what() << "\n";
+        print_usage(std::cerr, argv[0]);
+        return 1;
     }
 
-    std::vector<float> A(M * K);
-    std::vector<float> B(K * N);
-    std::vector<float> C(M * N, 0.0f);
+    if (config.showHelp) {
+        print_usage(std::cout, argv[0]);
+        return 0;
+    }
 
-    random_matrix(A.data(), M, K);
-    random_matrix(B.data(), K, N);
+    const GemmProblem& p = config.problem;
+    print_run_config("CUDA register-tiled GEMM", config);
 
-    float* d_A;
-    float* d_B;
-    float* d_C;
+    std::vector<float> A(static_cast<std::size_t>(p.M) * p.K);
+    std::vector<float> B(static_cast<std::size_t>(p.K) * p.N);
+    std::vector<float> C(static_cast<std::size_t>(p.M) * p.N, 0.0f);
 
-    cudaMalloc(&d_A, sizeof(float) * M * K);
-    cudaMalloc(&d_B, sizeof(float) * K * N);
-    cudaMalloc(&d_C, sizeof(float) * M * N);
+    random_matrix_seeded(A.data(), p.M, p.K, config.seed);
+    random_matrix_seeded(B.data(), p.K, p.N, config.seed + 1);
 
-    cudaMemcpy(d_A, A.data(), sizeof(float) * M * K, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_B, B.data(), sizeof(float) * K * N, cudaMemcpyHostToDevice);
+    const std::size_t bytesA = sizeof(float) * A.size();
+    const std::size_t bytesB = sizeof(float) * B.size();
+    const std::size_t bytesC = sizeof(float) * C.size();
 
-    dim3 block(8, 8);
-    dim3 grid((N + TILE_N - 1) / TILE_N, (M + TILE_M - 1) / TILE_M);
+    float* d_A = nullptr;
+    float* d_B = nullptr;
+    float* d_C = nullptr;
+    CUDA_CHECK(cudaMalloc(&d_A, bytesA));
+    CUDA_CHECK(cudaMalloc(&d_B, bytesB));
+    CUDA_CHECK(cudaMalloc(&d_C, bytesC));
+    CUDA_CHECK(cudaMemcpy(d_A, A.data(), bytesA, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_B, B.data(), bytesB, cudaMemcpyHostToDevice));
 
-    gemm_warp_kernel<<<grid, block>>>(d_A, d_B, d_C, M, N, K);
-    cudaDeviceSynchronize();
+    for (int i = 0; i < config.warmup; ++i) {
+        launch_gemm_warp(d_A, d_B, d_C, p);
+    }
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
 
-    cudaMemcpy(C.data(), d_C, sizeof(float) * M * N, cudaMemcpyDeviceToHost);
+    if (config.benchmark) {
+        GpuTimer timer;
+        timer.start();
+        for (int i = 0; i < config.repeat; ++i) {
+            launch_gemm_warp(d_A, d_B, d_C, p);
+        }
+        CUDA_CHECK(cudaGetLastError());
+        float totalMs = timer.stop_ms();
+        print_benchmark_result("Kernel", p, totalMs / static_cast<double>(config.repeat));
+    } else {
+        launch_gemm_warp(d_A, d_B, d_C, p);
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaDeviceSynchronize());
+    }
 
-    std::cout << "CUDA warp GEMM done: M=" << M << " N=" << N << " K=" << K << "\n";
-    std::cout << "Result sample: C[0]=" << C[0] << " C[last]=" << C[M * N - 1] << "\n";
+    CUDA_CHECK(cudaMemcpy(C.data(), d_C, bytesC, cudaMemcpyDeviceToHost));
 
-    cudaFree(d_A);
-    cudaFree(d_B);
-    cudaFree(d_C);
+    bool passed = true;
+    if (config.verify) {
+        std::vector<float> reference(C.size());
+        cpu_gemm_reference(A.data(), B.data(), reference.data(), p.M, p.N, p.K);
+        VerificationResult result = compare_matrices(C.data(), reference.data(), static_cast<int>(C.size()));
+        print_verification_result(result);
+        passed = result.passed;
+    }
 
-    return 0;
+    std::cout << "Result sample: C[0]=" << C.front()
+              << " C[last]=" << C.back() << "\n";
+
+    CUDA_CHECK(cudaFree(d_A));
+    CUDA_CHECK(cudaFree(d_B));
+    CUDA_CHECK(cudaFree(d_C));
+    return passed ? 0 : 1;
 }
