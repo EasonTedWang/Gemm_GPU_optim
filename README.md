@@ -10,12 +10,16 @@
 
 - `CMakeLists.txt` 根级 CMake 工程
 - `docs/gemm_learning_plan.md` GEMM 优化学习路线
+- `docs/02_tiled_optimization.md` tiled GEMM 阶段优化笔记
 - `code/origin_gemm.c` CPU reference / baseline
 - `code/common/` 公共实验工具
   - `matrix_utils.*` 参数解析、随机矩阵、CPU reference、误差比较、GFLOPS 输出
   - `cuda_utils.cuh` CUDA error check 和 kernel 计时器
 - `code/01_naive/` Naive CUDA GEMM
 - `code/02_tiled/` Shared-memory tiled CUDA GEMM
+  - `gemm_tiled_cuda`: 16x16 baseline
+  - `gemm_tiled32_cuda`: 32x32 one-output-per-thread 对照版本
+  - `gemm_tiled2x2_cuda`: 32x32 block tile + 每线程 2x2 输出
 - `code/03_warp/` Register-tiled CUDA GEMM
 - `code/04_tensor_core/` WMMA Tensor Core GEMM
 
@@ -64,6 +68,8 @@ cmake --build . --target all_examples
 ./out/origin_gemm 256 256 256 --verify --repeat 1 --warmup 0
 ./out/gemm_naive_cuda 256 256 256 --verify --repeat 10 --warmup 3
 ./out/gemm_tiled_cuda 256 256 256 --verify --repeat 10 --warmup 3
+./out/gemm_tiled32_cuda 256 256 256 --verify --repeat 10 --warmup 3
+./out/gemm_tiled2x2_cuda 256 256 256 --verify --repeat 10 --warmup 3
 ./out/gemm_warp_cuda 256 256 256 --verify --repeat 10 --warmup 3
 ./out/gemm_tensor_core 256 256 256 --verify --repeat 10 --warmup 3
 ```

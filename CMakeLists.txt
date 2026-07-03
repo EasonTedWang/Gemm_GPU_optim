@@ -34,7 +34,7 @@ add_subdirectory(code)
 
 set(ALL_GEMM_TARGETS origin_gemm)
 if(CUDAToolkit_FOUND)
-  list(APPEND ALL_GEMM_TARGETS gemm_naive_cuda gemm_tiled_cuda gemm_warp_cuda gemm_tensor_core)
+  list(APPEND ALL_GEMM_TARGETS gemm_naive_cuda gemm_tiled_cuda gemm_tiled32_cuda gemm_tiled2x2_cuda gemm_warp_cuda gemm_tensor_core)
 endif()
 
 add_custom_target(all_examples
@@ -54,6 +54,12 @@ if(CUDAToolkit_FOUND)
   add_test(NAME gemm_tiled_verify
     COMMAND ${CMAKE_SOURCE_DIR}/out/gemm_tiled_cuda 32 33 34 --verify --warmup 1 --repeat 1
   )
+  add_test(NAME gemm_tiled32_verify
+    COMMAND ${CMAKE_SOURCE_DIR}/out/gemm_tiled32_cuda 32 33 34 --verify --warmup 1 --repeat 1
+  )
+  add_test(NAME gemm_tiled2x2_verify
+    COMMAND ${CMAKE_SOURCE_DIR}/out/gemm_tiled2x2_cuda 32 33 34 --verify --warmup 1 --repeat 1
+  )
   add_test(NAME gemm_warp_verify
     COMMAND ${CMAKE_SOURCE_DIR}/out/gemm_warp_cuda 32 33 34 --verify --warmup 1 --repeat 1
   )
@@ -66,6 +72,12 @@ if(CUDAToolkit_FOUND)
   )
   add_test(NAME gemm_tiled_perf_512
     COMMAND ${CMAKE_SOURCE_DIR}/out/gemm_tiled_cuda 512 512 512 --no-verify --warmup 3 --repeat 10
+  )
+  add_test(NAME gemm_tiled32_perf_512
+    COMMAND ${CMAKE_SOURCE_DIR}/out/gemm_tiled32_cuda 512 512 512 --no-verify --warmup 3 --repeat 10
+  )
+  add_test(NAME gemm_tiled2x2_perf_512
+    COMMAND ${CMAKE_SOURCE_DIR}/out/gemm_tiled2x2_cuda 512 512 512 --no-verify --warmup 3 --repeat 10
   )
   add_test(NAME gemm_warp_perf_512
     COMMAND ${CMAKE_SOURCE_DIR}/out/gemm_warp_cuda 512 512 512 --no-verify --warmup 3 --repeat 10
