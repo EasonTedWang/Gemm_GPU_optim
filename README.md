@@ -20,6 +20,7 @@
   - `gemm_tiled_cuda`: 16x16 baseline
   - `gemm_tiled32_cuda`: 32x32 one-output-per-thread 对照版本
   - `gemm_tiled2x2_cuda`: 32x32 block tile + 每线程 2x2 输出
+  - `gemm_tiled4x4_cuda`: 64x64 block tile + 每线程 4x4 输出
 - `code/03_warp/` Register-tiled CUDA GEMM
 - `code/04_tensor_core/` WMMA Tensor Core GEMM
 
@@ -70,6 +71,7 @@ cmake --build . --target all_examples
 ./out/gemm_tiled_cuda 256 256 256 --verify --repeat 10 --warmup 3
 ./out/gemm_tiled32_cuda 256 256 256 --verify --repeat 10 --warmup 3
 ./out/gemm_tiled2x2_cuda 256 256 256 --verify --repeat 10 --warmup 3
+./out/gemm_tiled4x4_cuda 256 256 256 --verify --repeat 10 --warmup 3
 ./out/gemm_warp_cuda 256 256 256 --verify --repeat 10 --warmup 3
 ./out/gemm_tensor_core 256 256 256 --verify --repeat 10 --warmup 3
 ```

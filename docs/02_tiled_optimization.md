@@ -106,6 +106,18 @@ for (int k = 0; k < BLOCK_TILE_K; ++k) {
 
 这一步的本质不是“更大的 tile”，而是“一个线程做多个输出，使 A/B 从 shared memory 读出后能在寄存器里被多个 FMA 复用”。
 
+### tiled4x4 larger thread tile
+
+代码：`code/02_tiled/gemm_tiled4x4.cu`
+
+- Block tile: 64x64 C
+- Thread block: 16x16 = 256 threads
+- 每个线程计算 4x4 个 C 元素
+- K tile 使用 16，控制 shared memory 和寄存器压力
+- shared memory 对 A/B tile 做 +1 padding，降低典型列访问 bank conflict 风险
+
+这个版本延续 `tiled2x2` 的思路，但把每线程输出从 4 个提升到 16 个。收益主要来自 shared memory 数据进入寄存器后能服务更多 FMA；代价是 accumulator 更多、寄存器压力更高，所以不能只看 tile 变大，还要观察 occupancy 和调度效率。
+
 ## 为什么 tiled16 只有约 7%
 
 以 16x16 tile 为例，忽略 C 写回，每个 K tile 的粗略计算是：
@@ -156,10 +168,12 @@ load sharedA + load sharedB + 1 FMA
 ./out/gemm_tiled_cuda 512 512 512 --verify --warmup 5 --repeat 20
 ./out/gemm_tiled32_cuda 512 512 512 --verify --warmup 5 --repeat 20
 ./out/gemm_tiled2x2_cuda 512 512 512 --verify --warmup 5 --repeat 20
+./out/gemm_tiled4x4_cuda 512 512 512 --verify --warmup 5 --repeat 20
 
 ./out/gemm_tiled_cuda 1024 1024 1024 --no-verify --warmup 5 --repeat 20
 ./out/gemm_tiled32_cuda 1024 1024 1024 --no-verify --warmup 5 --repeat 20
 ./out/gemm_tiled2x2_cuda 1024 1024 1024 --no-verify --warmup 5 --repeat 20
+./out/gemm_tiled4x4_cuda 1024 1024 1024 --no-verify --warmup 5 --repeat 20
 ```
 
 结果会随驱动、功耗、温度和后台负载波动。当前一次实测如下：
@@ -169,9 +183,11 @@ load sharedA + load sharedB + 1 FMA
 | tiled16 | 512^3 | 0.0657 | 4084.43 | 7.2496% |
 | tiled32 | 512^3 | 0.0762 | 3520.93 | 6.2494% |
 | tiled2x2 | 512^3 | 0.0345 | 7785.25 | 13.8182% |
+| tiled4x4 | 512^3 | 0.0333 | 8072.96 | 14.3289% |
 | tiled16 | 1024^3 | 0.4689 | 4579.84 | 8.1289% |
 | tiled32 | 1024^3 | 0.4928 | 4357.92 | 7.7350% |
 | tiled2x2 | 1024^3 | 0.1751 | 12261.47 | 21.7632% |
+| tiled4x4 | 1024^3 | 0.1652 | 13002.07 | 23.0777% |
 
 正确性：
 
@@ -179,13 +195,15 @@ load sharedA + load sharedB + 1 FMA
 - tiled32 512 verify: PASSED
 - tiled2x2 512 verify: PASSED
 - tiled2x2 64x65x66 非整除 shape verify: PASSED
+- tiled4x4 512 verify: PASSED
+- tiled4x4 32x33x34 非整除 shape CTest verify: PASSED
 
 ## tiled 阶段最高能到多少
 
 这里要先定义“tiled 阶段”：
 
 1. 如果限定为 `每个线程只计算 1 个输出` 的 shared-memory tiled，那么上限很低。本机目前 tiled16/tiled32 大概在 6-8% FP32 peak。继续微调 tile size 可能有小幅波动，但很难质变。
-2. 如果允许 `每个线程计算多个输出`，但仍然只使用 shared-memory block tile，不进入 warp-level MMA / Tensor Core，那么 tiled2x2 已经到 13-22% FP32 peak。再继续做 4x4 thread tile、64x64 block tile、vectorized load、减少同步和处理 bank conflict，可能把这个阶段推进到 20-30% 左右。
+2. 如果允许 `每个线程计算多个输出`，但仍然只使用 shared-memory block tile，不进入 warp-level MMA / Tensor Core，那么 tiled2x2/tiled4x4 已经到 13-23% FP32 peak。继续做 vectorized load、减少同步和处理 bank conflict，可能把这个阶段推进到 20-30% 左右。
 3. 想接近现代 GEMM 的高效率，必须进入 register tiling + warp-level tiling + 更精细的 memory pipeline。想大幅超过 FP32 CUDA core 路线，则进入 Tensor Core。
 
 所以当前最重要的结论是：
@@ -198,15 +216,14 @@ shared memory tiling 解决的是 global memory reuse；
 
 ## 下一步怎么提高
 
-建议下一轮从 `tiled2x2` 继续，而不是从 `tiled32` 继续：
+建议下一轮从 `tiled4x4` 继续，而不是从 `tiled32` 继续：
 
-1. 尝试 `THREAD_TILE_M=4, THREAD_TILE_N=4`
-   - 每线程 16 个 accumulator，寄存器压力上升
-   - shared-memory 复用进一步提高
-   - 需要观察 occupancy 是否下降
-2. 尝试 `BLOCK_TILE_M=64, BLOCK_TILE_N=64, BLOCK_TILE_K=8/16`
-   - block 负责更大 C tile
-   - thread layout 需要重新设计，不能简单 64x64 threads
+1. 先 profile `tiled4x4`
+   - 观察 register count、occupancy、shared memory throughput
+   - 确认 4x4 的瓶颈是寄存器压力、shared memory 访问，还是 global load 指令数
+2. 尝试 `BLOCK_TILE_K=8/32`
+   - `K=8` 可能降低 shared memory 和寄存器压力
+   - `K=32` 可能提高 global-memory reuse，但会增加 shared memory 占用
 3. 加 vectorized global load
    - 用 `float4` 或让连续线程加载连续地址
    - 目标是减少 load 指令，提高 memory transaction 效率
@@ -223,5 +240,5 @@ shared memory tiling 解决的是 global memory reuse；
 - 不要把 “tile 大” 等同于 “更快”。tile 大只提高 global reuse，但可能降低 occupancy 和调度弹性。
 - GEMM 的性能来自层级复用：global -> shared -> register。当前 tiled16 只做了第一层。
 - 每线程多个输出是从 naive tiled 走向高性能 GEMM 的关键转折点。
-- 性能优化必须和正确性测试绑定。`tiled2x2` 已经覆盖普通 512 shape 和非整除 shape 的正确性。
+- 性能优化必须和正确性测试绑定。`tiled2x2` 和 `tiled4x4` 都已经覆盖普通 shape 和非整除 shape 的正确性。
 - 当某个版本没有变快，它也有价值：`tiled32` 说明瓶颈已经从 global memory 转向 shared-memory/register/调度层面。
