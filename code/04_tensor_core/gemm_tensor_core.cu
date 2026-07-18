@@ -159,7 +159,7 @@ int main(int argc, char** argv)
         }
         CUDA_CHECK(cudaGetLastError());
         float totalMs = timer.stop_ms();
-        print_benchmark_result("Kernel", p, totalMs / static_cast<double>(config.repeat), &default_gpu_profile());
+        print_benchmark_result("Kernel", p, totalMs / static_cast<double>(config.repeat));
     } else {
         launch_tensorcore_gemm(d_A, d_B, d_C, p);
         CUDA_CHECK(cudaGetLastError());

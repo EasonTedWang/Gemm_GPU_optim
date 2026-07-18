@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build directory path
-BUILD_DIR="build"
+BUILD_DIR="${GEMM_BUILD_DIR:-build}"
+CUDA_ARCHITECTURES="${GEMM_CUDA_ARCHITECTURES:-120}"
 
-mkdir -p "${BUILD_DIR}"
-cd "${BUILD_DIR}"
+cmake -S . -B "${BUILD_DIR}" \
+  -DENABLE_CUDA=ON \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DGEMM_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURES}"
+cmake --build "${BUILD_DIR}" --parallel --target all_examples
 
-cmake .. -DENABLE_CUDA=ON
-cmake --build . --target all_examples
-
-echo "Build complete. Executables are in ${PWD}/../out"
+echo "Build complete. Executables are in $(pwd)/out"
